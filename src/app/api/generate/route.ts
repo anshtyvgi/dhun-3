@@ -9,24 +9,35 @@ export async function POST(request: Request) {
     const { promptText, enhancedPrompt, chips, emotion, recipientType } =
       await request.json();
 
+    console.log("[Generate] Starting:", { emotion, recipientType, promptText: promptText?.slice(0, 50) });
+
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
+      console.log("[Generate] No auth user found");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Use enhanced prompt or create one
+    console.log("[Generate] User:", user.id);
+
+    // Use enhanced prompt or create one — catch Gemini errors gracefully
     let finalPrompt = enhancedPrompt;
     if (!finalPrompt) {
-      finalPrompt = await enhancePrompt({
-        promptText: promptText || "",
-        chips: chips || [],
-        emotion,
-        recipientType,
-      });
+      try {
+        finalPrompt = await enhancePrompt({
+          promptText: promptText || "",
+          chips: chips || [],
+          emotion,
+          recipientType,
+        });
+        console.log("[Generate] Prompt enhanced:", finalPrompt?.slice(0, 80));
+      } catch (err) {
+        console.error("[Generate] Gemini enhancement failed, using raw prompt:", err);
+        finalPrompt = promptText || `A ${emotion} song`;
+      }
     }
 
     const emotionConfig = emotions[emotion as keyof typeof emotions];
@@ -45,11 +56,18 @@ export async function POST(request: Request) {
       .select()
       .single();
 
-    if (batchError) throw batchError;
+    if (batchError) {
+      console.error("[Generate] Batch creation failed:", batchError);
+      throw batchError;
+    }
 
-    // Fire 3 Suno requests in PARALLEL for speed
+    console.log("[Generate] Batch created:", batch.id);
+
+    // Fire 3 Suno requests in PARALLEL — each returns 2 songs = 6 total
+    // User picks their favorite from the results
     const songPromises = Array.from({ length: 3 }, async (_, i) => {
       try {
+        console.log(`[Generate] Firing Suno request ${i + 1}/3`);
         const sunoResult = await generateSong({
           prompt: finalPrompt,
           style: emotionConfig?.sunoStyle || "",
@@ -57,6 +75,8 @@ export async function POST(request: Request) {
           customMode: false,
           instrumental: false,
         });
+
+        console.log(`[Generate] Suno ${i + 1} taskId: ${sunoResult.task_id}`);
 
         const { data: song } = await supabase
           .from("songs")
@@ -75,22 +95,19 @@ export async function POST(request: Request) {
 
         return song;
       } catch (err) {
-        console.error(`Song ${i} generation failed:`, err);
+        console.error(`[Generate] Song ${i + 1} failed:`, err);
         return null;
       }
     });
 
-    // All 3 fire at once — don't wait sequentially
     const songs = (await Promise.all(songPromises)).filter(Boolean);
+    console.log(`[Generate] ${songs.length} songs created in DB`);
 
-    return NextResponse.json({
-      batchId: batch.id,
-      songs,
-    });
+    return NextResponse.json({ batchId: batch.id, songs });
   } catch (error) {
-    console.error("Generate error:", error);
+    console.error("[Generate] Fatal error:", error);
     return NextResponse.json(
-      { error: "Failed to generate songs" },
+      { error: error instanceof Error ? error.message : "Failed to generate songs" },
       { status: 500 }
     );
   }

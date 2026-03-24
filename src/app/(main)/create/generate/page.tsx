@@ -19,6 +19,7 @@ export default function GeneratePage() {
   const store = useCreateStore();
   const [messageIdx, setMessageIdx] = useState(0);
   const [started, setStarted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const emotionConfig = store.emotion ? emotions[store.emotion] : null;
@@ -46,12 +47,16 @@ export default function GeneratePage() {
       });
 
       const data = await res.json();
+      console.log("[UI] Generate response:", data);
       if (data.batchId) {
         store.setBatchId(data.batchId);
         startPolling(data.batchId);
+      } else {
+        setError(data.error || "Failed to start generation");
       }
     } catch (err) {
       console.error("Generation failed:", err);
+      setError(err instanceof Error ? err.message : "Network error");
     }
   }, [store]);
 
@@ -168,10 +173,22 @@ export default function GeneratePage() {
           </motion.p>
         </AnimatePresence>
 
-        {/* Hint */}
-        <p className="text-white/20 text-[13px] text-center">
-          This usually takes 30–60 seconds
-        </p>
+        {/* Hint or Error */}
+        {error ? (
+          <div className="space-y-3 text-center">
+            <p className="text-red-400 text-[14px]">{error}</p>
+            <button
+              onClick={() => { setError(null); setStarted(false); }}
+              className="text-[#cbff00] text-[13px] font-medium"
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <p className="text-white/20 text-[13px] text-center">
+            This usually takes 30–60 seconds
+          </p>
+        )}
       </div>
     </div>
   );
