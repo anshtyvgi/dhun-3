@@ -68,8 +68,15 @@ export default function GeneratePage() {
       });
 
       addLog(`Response status: ${res.status}`);
-      const data = await res.json();
-      addLog(`Response body: ${JSON.stringify(data).slice(0, 200)}`);
+      const rawText = await res.text();
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const cleaned = rawText.replace(/[\x00-\x1f\x7f]/g, " ");
+        data = JSON.parse(cleaned);
+      }
+      addLog(`Response: batchId=${data.batchId}, songs=${data.songs?.length}`);
 
       if (data.batchId) {
         addLog(`Batch created: ${data.batchId}`, "success");
@@ -106,7 +113,15 @@ export default function GeneratePage() {
           ? `/api/generate/status?taskIds=${taskIdList.join(",")}`
           : `/api/generate/status?batchId=${batchId}`;
         const res = await fetch(url);
-        const data = await res.json();
+        const rawText = await res.text();
+        let data;
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          // Handle control characters in response
+          const cleaned = rawText.replace(/[\x00-\x1f\x7f]/g, " ");
+          data = JSON.parse(cleaned);
+        }
 
         const completed = data.songs?.filter((s: { status: string }) => s.status === "completed") || [];
         const pending = data.songs?.filter((s: { status: string }) => s.status === "generating" || s.status === "pending") || [];
