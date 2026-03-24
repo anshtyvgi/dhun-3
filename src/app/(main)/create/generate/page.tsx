@@ -14,11 +14,8 @@ const LOADING_MESSAGES = [
   "Almost there...",
 ];
 
-interface LogEntry {
-  time: string;
-  msg: string;
-  type: "info" | "error" | "success";
-}
+interface LogEntry { time: string; msg: string; type: "info" | "error" | "success"; }
+interface SongResponse { suno_task_id?: string; status?: string; error?: string; }
 
 export default function GeneratePage() {
   const router = useRouter();
@@ -27,72 +24,73 @@ export default function GeneratePage() {
   const [started, setStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [showDebug, setShowDebug] = useState(false);
+  const [showDebug, setShowDebug] = useState(true); // Auto-open for debugging
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const emotionConfig = store.emotion ? emotions[store.emotion] : null;
   const colors = emotionConfig?.colors || ["#a855f7", "#ec4899", "#f97316"];
 
   const addLog = useCallback((msg: string, type: LogEntry["type"] = "info") => {
-    const time = new Date().toLocaleTimeString();
-    setLogs((prev) => [...prev, { time, msg, type }]);
+    setLogs((prev) => [...prev, { time: new Date().toLocaleTimeString(), msg, type }]);
   }, []);
 
   const startGeneration = useCallback(async () => {
     addLog("Starting generation...");
     addLog(`Emotion: ${store.emotion}, Recipient: ${store.recipient}`);
-    addLog(`Prompt: "${store.promptText?.slice(0, 60) || "(empty)"}"`);
-    addLog(`Enhanced: ${store.enhancedPrompt ? "yes" : "no"}`);
 
     try {
-      const allChips = [
-        ...store.moodChips,
-        ...store.genreChips,
-        ...store.languageChips,
-        ...store.intentChips,
-      ];
+      const allChips = [...store.moodChips, ...store.genreChips, ...store.languageChips, ...store.intentChips];
+      const body = {
+        promptText: store.promptText,
+        enhancedPrompt: store.enhancedPrompt,
+        chips: allChips,
+        emotion: store.emotion,
+        recipientType: store.recipient,
+      };
 
-      addLog(`Chips: ${allChips.join(", ") || "(none)"}`);
-      addLog("Calling /api/generate...");
-
+      addLog("POST /api/generate");
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          promptText: store.promptText,
-          enhancedPrompt: store.enhancedPrompt,
-          chips: allChips,
-          emotion: store.emotion,
-          recipientType: store.recipient,
-        }),
+        body: JSON.stringify(body),
       });
 
-      addLog(`Response status: ${res.status}`);
+      addLog(`Status: ${res.status}`);
       const rawText = await res.text();
+
       let data;
       try {
         data = JSON.parse(rawText);
       } catch {
-        const cleaned = rawText.replace(/[\x00-\x1f\x7f]/g, " ");
-        data = JSON.parse(cleaned);
+        data = JSON.parse(rawText.replace(/[\x00-\x1f\x7f]/g, " "));
       }
-      addLog(`Response: batchId=${data.batchId}, songs=${data.songs?.length}`);
 
-      if (data.batchId) {
-        addLog(`Batch created: ${data.batchId}`, "success");
-        addLog(`Songs: ${data.songs?.length || 0}`);
-        data.songs?.forEach((s: { suno_task_id?: string }, i: number) => {
-          addLog(`  Song ${i + 1} taskId: ${s.suno_task_id || "unknown"}`);
-        });
-        store.setBatchId(data.batchId);
-        // Collect task IDs for anonymous polling
-        const taskIdList = data.songs?.map((s: { suno_task_id?: string }) => s.suno_task_id).filter(Boolean) || [];
-        startPolling(data.batchId, taskIdList);
-      } else {
-        const errMsg = data.error || `HTTP ${res.status}`;
-        addLog(`Generation failed: ${errMsg}`, "error");
-        setError(errMsg);
+      // Extract valid task IDs
+      const songs: SongResponse[] = data.songs || [];
+      const validTasks = songs.filter((s) => s.suno_task_id && s.status !== "failed");
+      const failedSongs = songs.filter((s) => s.status === "failed");
+
+      addLog(`Songs: ${songs.length} total, ${validTasks.length} valid, ${failedSongs.length} failed`);
+
+      // Show errors from failed songs
+      failedSongs.forEach((s, i) => {
+        addLog(`Song error: ${s.error || "unknown"}`, "error");
+      });
+
+      validTasks.forEach((s, i) => {
+        addLog(`Task ${i + 1}: ${s.suno_task_id}`, "success");
+      });
+
+      if (validTasks.length === 0) {
+        const firstError = failedSongs[0]?.error || data.error || "All songs failed";
+        setError(firstError);
+        addLog(`FATAL: ${firstError}`, "error");
+        return;
       }
+
+      store.setBatchId(data.batchId || "batch");
+      const taskIds = validTasks.map((s) => s.suno_task_id!);
+      startPolling(taskIds);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";
       addLog(`Exception: ${msg}`, "error");
@@ -100,49 +98,31 @@ export default function GeneratePage() {
     }
   }, [store, addLog]);
 
-  const startPolling = (_batchId: string, taskIdList: string[] = []) => {
+  const startPolling = (taskIds: string[]) => {
     let pollCount = 0;
-    addLog(`Polling ${taskIdList.length} tasks: ${taskIdList.join(", ")}`);
-
-    if (taskIdList.length === 0) {
-      addLog("No task IDs to poll!", "error");
-      setError("No songs were created — check API logs");
-      return;
-    }
+    addLog(`Polling ${taskIds.length} tasks every 3s...`);
 
     pollRef.current = setInterval(async () => {
       pollCount++;
       try {
-        const url = `/api/generate/status?taskIds=${taskIdList.join(",")}`;
+        const url = `/api/generate/status?taskIds=${taskIds.join(",")}`;
         const res = await fetch(url);
         const rawText = await res.text();
         let data;
-        try {
-          data = JSON.parse(rawText);
-        } catch {
-          // Handle control characters in response
-          const cleaned = rawText.replace(/[\x00-\x1f\x7f]/g, " ");
-          data = JSON.parse(cleaned);
-        }
+        try { data = JSON.parse(rawText); }
+        catch { data = JSON.parse(rawText.replace(/[\x00-\x1f\x7f]/g, " ")); }
 
         const completed = data.songs?.filter((s: { status: string }) => s.status === "completed") || [];
         const pending = data.songs?.filter((s: { status: string }) => s.status === "generating" || s.status === "pending") || [];
-        const failed = data.songs?.filter((s: { status: string }) => s.status === "failed") || [];
 
-        addLog(`Poll #${pollCount}: ${completed.length} done, ${pending.length} pending, ${failed.length} failed`);
+        addLog(`Poll #${pollCount}: ${completed.length} ready, ${pending.length} waiting`);
 
         if (completed.length >= 1) {
-          addLog(`Song ready! Navigating to results...`, "success");
+          addLog(`DONE! "${completed[0].title}" — navigating...`, "success");
           store.setSongs(data.songs);
           store.selectSong(completed[0].id);
           if (pollRef.current) clearInterval(pollRef.current);
-          router.push("/create/results");
-        }
-
-        if (data.songs?.length > 0 && failed.length === data.songs.length) {
-          addLog("All songs failed!", "error");
-          if (pollRef.current) clearInterval(pollRef.current);
-          setError("All songs failed to generate. Try again.");
+          setTimeout(() => router.push("/create/results"), 500);
         }
       } catch (err) {
         addLog(`Poll error: ${err}`, "error");
@@ -151,51 +131,29 @@ export default function GeneratePage() {
   };
 
   useEffect(() => {
-    if (!store.emotion) {
-      router.replace("/create/prompt");
-      return;
-    }
-    if (!started) {
-      setStarted(true);
-      startGeneration();
-    }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    if (!store.emotion) { router.replace("/create/prompt"); return; }
+    if (!started) { setStarted(true); startGeneration(); }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [store.emotion, router, started, startGeneration]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setMessageIdx((i) => (i + 1) % LOADING_MESSAGES.length);
-    }, 3000);
+    const interval = setInterval(() => setMessageIdx((i) => (i + 1) % LOADING_MESSAGES.length), 3000);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <div
-      className="min-h-screen relative flex flex-col items-center justify-center overflow-hidden"
-      style={{ background: "#08080c" }}
-    >
-      {/* Background blobs */}
+    <div className="min-h-screen relative flex flex-col items-center justify-center overflow-hidden" style={{ background: "#08080c" }}>
+      {/* Background */}
       <div className="fixed inset-0 pointer-events-none">
-        <div
-          className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full blur-[150px] opacity-[0.12]"
-          style={{ background: `radial-gradient(circle, ${colors[0]}, transparent 70%)` }}
-        />
-        <div
-          className="absolute bottom-1/4 left-1/4 w-[350px] h-[350px] rounded-full blur-[120px] opacity-[0.08]"
-          style={{ background: `radial-gradient(circle, ${colors[1]}, transparent 70%)` }}
-        />
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full blur-[150px] opacity-[0.12]" style={{ background: `radial-gradient(circle, ${colors[0]}, transparent 70%)` }} />
       </div>
 
-      <div className="relative z-10 flex flex-col items-center space-y-8 px-6 w-full max-w-[400px]">
+      <div className="relative z-10 flex flex-col items-center space-y-6 px-6 w-full max-w-[400px]">
         {/* Waveform */}
         {!error && (
-          <div className="flex items-end gap-[5px] h-20">
+          <div className="flex items-end gap-[5px] h-16">
             {Array.from({ length: 12 }).map((_, i) => (
-              <motion.div
-                key={i}
-                className="w-[5px] rounded-full"
+              <motion.div key={i} className="w-[4px] rounded-full"
                 style={{ background: `linear-gradient(to top, ${colors[0]}, ${colors[2]})` }}
                 animate={{ height: ["20%", `${40 + Math.random() * 60}%`, "20%"] }}
                 transition={{ duration: 1 + Math.random() * 0.5, repeat: Infinity, delay: i * 0.1, ease: "easeInOut" }}
@@ -204,24 +162,17 @@ export default function GeneratePage() {
           </div>
         )}
 
-        {/* Status message or error */}
+        {/* Status or error */}
         {error ? (
           <div className="space-y-4 text-center w-full">
-            <div className="w-14 h-14 rounded-full bg-red-500/[0.10] flex items-center justify-center mx-auto">
-              <span className="text-2xl">!</span>
-            </div>
-            <p className="text-red-400 text-[15px] font-medium">{error}</p>
+            <p className="text-red-400 text-[14px] font-medium">{error}</p>
             <div className="flex gap-3 justify-center">
-              <button
-                onClick={() => { setError(null); setStarted(false); setLogs([]); }}
-                className="h-10 px-5 rounded-xl bg-[#cbff00] text-[#08080c] text-[13px] font-semibold"
-              >
+              <button onClick={() => { setError(null); setStarted(false); setLogs([]); }}
+                className="h-10 px-5 rounded-xl bg-[#cbff00] text-[#08080c] text-[13px] font-semibold">
                 Try again
               </button>
-              <button
-                onClick={() => router.push("/create/prompt")}
-                className="h-10 px-5 rounded-xl bg-white/[0.06] text-white/50 text-[13px] font-medium"
-              >
+              <button onClick={() => router.push("/create/prompt")}
+                className="h-10 px-5 rounded-xl bg-white/[0.06] text-white/50 text-[13px]">
                 Go back
               </button>
             </div>
@@ -229,53 +180,33 @@ export default function GeneratePage() {
         ) : (
           <>
             <AnimatePresence mode="wait">
-              <motion.p
-                key={messageIdx}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="text-lg font-medium text-center text-white"
-              >
+              <motion.p key={messageIdx} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+                className="text-lg font-medium text-center text-white">
                 {LOADING_MESSAGES[messageIdx]}
               </motion.p>
             </AnimatePresence>
-            <p className="text-white/20 text-[13px] text-center">
-              This usually takes 30–60 seconds
-            </p>
+            <p className="text-white/20 text-[13px]">Takes 30–60 seconds</p>
           </>
         )}
 
-        {/* Dev Debug Toggle */}
-        <button
-          onClick={() => setShowDebug(!showDebug)}
-          className="text-white/15 text-[11px] font-mono hover:text-white/30 transition-colors"
-        >
-          {showDebug ? "hide" : "show"} debug logs ({logs.length})
-        </button>
-
-        {/* Debug Panel */}
-        {showDebug && (
-          <div className="w-full rounded-xl bg-black/60 border border-white/[0.06] p-4 max-h-[300px] overflow-y-auto">
-            <p className="text-white/30 text-[10px] font-mono uppercase tracking-wider mb-2">Dev Logs</p>
-            <div className="space-y-1">
+        {/* Debug panel — always visible */}
+        <div className="w-full">
+          <button onClick={() => setShowDebug(!showDebug)}
+            className="text-white/20 text-[11px] font-mono mb-2">
+            {showDebug ? "▼" : "▶"} debug ({logs.length})
+          </button>
+          {showDebug && (
+            <div className="w-full rounded-xl bg-black/60 border border-white/[0.06] p-3 max-h-[250px] overflow-y-auto">
               {logs.map((log, i) => (
-                <p
-                  key={i}
-                  className={`text-[11px] font-mono leading-relaxed ${
-                    log.type === "error" ? "text-red-400" :
-                    log.type === "success" ? "text-green-400" :
-                    "text-white/40"
-                  }`}
-                >
-                  <span className="text-white/20">[{log.time}]</span> {log.msg}
+                <p key={i} className={`text-[10px] font-mono leading-relaxed ${
+                  log.type === "error" ? "text-red-400" : log.type === "success" ? "text-green-400" : "text-white/40"
+                }`}>
+                  <span className="text-white/15">[{log.time}]</span> {log.msg}
                 </p>
               ))}
-              {logs.length === 0 && (
-                <p className="text-white/20 text-[11px] font-mono">Waiting...</p>
-              )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
