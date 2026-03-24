@@ -28,6 +28,7 @@ async function sunoFetch(url: string, options: RequestInit = {}) {
 export async function generateSong(
   request: SunoGenerateRequest
 ): Promise<SunoTaskResponse> {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://dhun-3.vercel.app";
   const body = {
     prompt: request.prompt,
     style: request.style || "",
@@ -35,7 +36,7 @@ export async function generateSong(
     customMode: request.customMode ?? false,
     instrumental: request.instrumental ?? false,
     model: request.model || "V4",
-    callBackUrl: request.callbackUrl || "",
+    callBackUrl: request.callbackUrl || `${appUrl}/api/generate/webhook`,
   };
 
   const result = await sunoFetch(SUNO_BASE_URL, {
