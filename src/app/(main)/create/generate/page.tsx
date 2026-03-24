@@ -130,7 +130,7 @@ export default function GeneratePage() {
       } catch (err) {
         addLog(`Poll error: ${err}`, "error");
       }
-    }, 4000);
+    }, 3000);
   };
 
   useEffect(() => {
