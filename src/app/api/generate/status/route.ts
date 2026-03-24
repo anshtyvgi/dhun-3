@@ -32,13 +32,12 @@ export async function GET(request: Request) {
             const status = await getSongStatus(song.suno_task_id);
             console.log(`[Suno Status] task=${song.suno_task_id} status=${status.status} data_count=${status.data?.length || 0}`);
 
-            // Suno returns various status strings — handle all known ones
-            const isComplete = ["complete", "SUCCESS", "completed", "FIRST_SUCCESS"].some(
-              (s) => status.status?.toLowerCase() === s.toLowerCase()
-            );
-            const isFailed = ["failed", "FAILED", "error", "ERROR"].some(
-              (s) => status.status?.toLowerCase() === s.toLowerCase()
-            );
+            // Suno API status values: PENDING, TEXT_SUCCESS, FIRST_SUCCESS, SUCCESS,
+            // CREATE_TASK_FAILED, GENERATE_AUDIO_FAILED, CALLBACK_EXCEPTION, SENSITIVE_WORD_ERROR
+            const s = (status.status || "").toUpperCase();
+            const isComplete = s === "SUCCESS" || s === "FIRST_SUCCESS";
+            const isFailed = s === "CREATE_TASK_FAILED" || s === "GENERATE_AUDIO_FAILED" ||
+              s === "CALLBACK_EXCEPTION" || s === "SENSITIVE_WORD_ERROR";
 
             if (isComplete && status.data && status.data.length > 0) {
               const sunoData = status.data[0];

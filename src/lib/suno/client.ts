@@ -1,9 +1,11 @@
 import type { SunoGenerateRequest, SunoTaskResponse, SunoStatusResponse } from "./types";
 
-const SUNO_BASE_URL = "https://apibox.erweima.ai/api/v1/generate";
+const SUNO_BASE_URL = "https://api.sunoapi.org/api/v1/generate";
 const SUNO_API_KEY = process.env.SUNO_API_KEY!;
 
 async function sunoFetch(url: string, options: RequestInit = {}) {
+  console.log(`[Suno] ${options.method || "GET"} ${url}`);
+
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -13,12 +15,14 @@ async function sunoFetch(url: string, options: RequestInit = {}) {
     },
   });
 
+  const text = await response.text();
+  console.log(`[Suno] Response ${response.status}: ${text.slice(0, 300)}`);
+
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Suno API error (${response.status}): ${error}`);
+    throw new Error(`Suno API error (${response.status}): ${text}`);
   }
 
-  return response.json();
+  return JSON.parse(text);
 }
 
 export async function generateSong(
@@ -31,7 +35,7 @@ export async function generateSong(
     customMode: request.customMode ?? false,
     instrumental: request.instrumental ?? false,
     model: request.model || "V4",
-    callbackUrl: request.callbackUrl || "",
+    callBackUrl: request.callbackUrl || "",
   };
 
   const result = await sunoFetch(SUNO_BASE_URL, {
@@ -39,8 +43,11 @@ export async function generateSong(
     body: JSON.stringify(body),
   });
 
+  const taskId = result.data?.taskId || result.taskId || result.data?.task_id;
+  console.log(`[Suno] Generated taskId: ${taskId}`);
+
   return {
-    task_id: result.data?.taskId || result.taskId || result.data?.task_id,
+    task_id: taskId,
     status: "pending",
   };
 }
@@ -49,16 +56,17 @@ export async function getSongStatus(
   taskId: string
 ): Promise<SunoStatusResponse> {
   const result = await sunoFetch(
-    `https://apibox.erweima.ai/api/v1/generate/record-info?taskId=${taskId}`,
+    `https://api.sunoapi.org/api/v1/generate/record-info?taskId=${taskId}`,
     { method: "GET" }
   );
 
   const data = result.data;
+  console.log(`[Suno] Status for ${taskId}: ${data?.status}, sunoData count: ${data?.response?.sunoData?.length || 0}`);
 
   return {
     task_id: taskId,
-    status: data?.status || "pending",
-    data: data?.response?.sunoData || data?.sunoData || [],
+    status: data?.status || "PENDING",
+    data: data?.response?.sunoData || [],
     error: data?.errorMessage,
   };
 }
