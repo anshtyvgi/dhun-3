@@ -41,14 +41,17 @@ export async function GET(request: Request) {
 
             if (isComplete && status.data && status.data.length > 0) {
               const sunoData = status.data[0];
-              console.log(`[Suno Complete] title="${sunoData.title}" audio="${sunoData.audio_url?.slice(0, 80)}..." duration=${sunoData.duration}`);
+              console.log(`[Suno Complete] title="${sunoData.title}" audio="${sunoData.audioUrl?.slice(0, 80)}..." duration=${sunoData.duration}`);
+
+              // Extract lyrics from the prompt field (Suno puts lyrics there)
+              const lyrics = sunoData.prompt || null;
 
               const { data: updated } = await supabase
                 .from("songs")
                 .update({
                   status: "completed",
-                  audio_url: sunoData.audio_url || sunoData.stream_audio_url || null,
-                  lyrics: sunoData.lyric || null,
+                  audio_url: sunoData.audioUrl || sunoData.streamAudioUrl || null,
+                  lyrics,
                   title: sunoData.title || null,
                   duration_seconds: sunoData.duration ? Math.round(sunoData.duration) : null,
                   updated_at: new Date().toISOString(),

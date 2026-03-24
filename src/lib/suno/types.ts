@@ -13,19 +13,21 @@ export interface SunoTaskResponse {
   status: string;
 }
 
+// Matches actual API camelCase response
 export interface SunoSongData {
   id: string;
   title: string;
-  audio_url: string;
-  stream_audio_url?: string;
-  image_url?: string;
-  lyric?: string;
-  model_name?: string;
-  status: string;
+  audioUrl: string;
+  sourceAudioUrl?: string;
+  streamAudioUrl?: string;
+  sourceStreamAudioUrl?: string;
+  imageUrl?: string;
+  sourceImageUrl?: string;
+  prompt?: string;
+  modelName?: string;
   duration?: number;
-  created_at?: string;
+  createTime?: number;
   tags?: string;
-  error_message?: string;
 }
 
 export interface SunoStatusResponse {

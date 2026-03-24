@@ -4,46 +4,47 @@ import { NextResponse } from "next/server";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { task_id, status, data } = body;
+    console.log("[Webhook] Received:", JSON.stringify(body).slice(0, 500));
 
-    if (!task_id) {
-      return NextResponse.json({ error: "Missing task_id" }, { status: 400 });
+    // Suno callback format: { data: { taskId, status, response: { sunoData: [...] } } }
+    const taskId = body.data?.taskId || body.task_id || body.taskId;
+    const status = body.data?.status || body.status;
+    const sunoDataArr = body.data?.response?.sunoData || body.data?.sunoData || [];
+
+    if (!taskId) {
+      return NextResponse.json({ error: "Missing taskId" }, { status: 400 });
     }
 
     const supabase = createAdminClient();
 
-    if (status === "complete" || status === "SUCCESS") {
-      const sunoData = data?.[0] || data;
+    if (status === "SUCCESS" || status === "FIRST_SUCCESS") {
+      const sunoData = sunoDataArr[0];
+      if (sunoData) {
+        await supabase
+          .from("songs")
+          .update({
+            status: "completed",
+            audio_url: sunoData.audioUrl || sunoData.streamAudioUrl || null,
+            lyrics: sunoData.prompt || null,
+            title: sunoData.title || null,
+            duration_seconds: sunoData.duration ? Math.round(sunoData.duration) : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("suno_task_id", taskId);
 
+        console.log(`[Webhook] Updated song for task ${taskId} — ${sunoData.title}`);
+      }
+    } else if (["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "SENSITIVE_WORD_ERROR"].includes(status)) {
       await supabase
         .from("songs")
-        .update({
-          status: "completed",
-          audio_url: sunoData?.audio_url || sunoData?.stream_audio_url,
-          lyrics: sunoData?.lyric || null,
-          title: sunoData?.title || null,
-          duration_seconds: sunoData?.duration
-            ? Math.round(sunoData.duration)
-            : null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("suno_task_id", task_id);
-    } else if (status === "failed" || status === "FAILED") {
-      await supabase
-        .from("songs")
-        .update({
-          status: "failed",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("suno_task_id", task_id);
+        .update({ status: "failed", updated_at: new Date().toISOString() })
+        .eq("suno_task_id", taskId);
+      console.log(`[Webhook] Song failed for task ${taskId}: ${status}`);
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Webhook error:", error);
-    return NextResponse.json(
-      { error: "Webhook processing failed" },
-      { status: 500 }
-    );
+    console.error("[Webhook] Error:", error);
+    return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }
