@@ -22,7 +22,9 @@ async function sunoFetch(url: string, options: RequestInit = {}) {
     throw new Error(`Suno API error (${response.status}): ${text}`);
   }
 
-  return JSON.parse(text);
+  // Clean control characters before parsing
+  const cleaned = text.replace(/[\x00-\x1f\x7f]/g, " ");
+  return JSON.parse(cleaned);
 }
 
 export async function generateSong(
@@ -44,13 +46,17 @@ export async function generateSong(
     body: JSON.stringify(body),
   });
 
-  const taskId = result.data?.taskId || result.taskId || result.data?.task_id;
-  console.log(`[Suno] Generated taskId: ${taskId}`);
+  // Extract taskId — try all possible paths
+  const taskId = result?.data?.taskId || result?.taskId || result?.data?.task_id || null;
+  console.log(`[Suno] Raw result keys: ${JSON.stringify(Object.keys(result || {}))}`);
+  console.log(`[Suno] result.data: ${JSON.stringify(result?.data)}`);
+  console.log(`[Suno] Extracted taskId: ${taskId}`);
 
-  return {
-    task_id: taskId,
-    status: "pending",
-  };
+  if (!taskId) {
+    throw new Error(`Suno returned no taskId. Response: ${JSON.stringify(result).slice(0, 200)}`);
+  }
+
+  return { task_id: taskId, status: "pending" };
 }
 
 export async function getSongStatus(
@@ -62,7 +68,6 @@ export async function getSongStatus(
   );
 
   const data = result.data;
-  console.log(`[Suno] Status for ${taskId}: ${data?.status}, sunoData count: ${data?.response?.sunoData?.length || 0}`);
 
   return {
     task_id: taskId,
