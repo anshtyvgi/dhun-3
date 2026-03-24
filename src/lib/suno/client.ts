@@ -31,8 +31,13 @@ export async function generateSong(
   request: SunoGenerateRequest
 ): Promise<SunoTaskResponse> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://dhun-3.vercel.app";
+  // Non-custom mode: prompt max 500 chars. Truncate if needed.
+  const prompt = request.customMode
+    ? request.prompt
+    : (request.prompt || "").slice(0, 490);
+
   const body = {
-    prompt: request.prompt,
+    prompt,
     style: request.style || "",
     title: request.title || "",
     customMode: request.customMode ?? false,
