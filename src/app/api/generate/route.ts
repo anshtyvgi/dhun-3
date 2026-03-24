@@ -47,32 +47,41 @@ export async function POST(request: Request) {
 
     if (batchError) throw batchError;
 
-    // Generate 1 song via Suno (user can extend later)
-    const sunoResult = await generateSong({
-      prompt: finalPrompt,
-      style: emotionConfig?.sunoStyle || "",
-      title: "",
-      customMode: false,
-      instrumental: false,
+    // Fire 3 Suno requests in PARALLEL for speed
+    const songPromises = Array.from({ length: 3 }, async (_, i) => {
+      try {
+        const sunoResult = await generateSong({
+          prompt: finalPrompt,
+          style: emotionConfig?.sunoStyle || "",
+          title: "",
+          customMode: false,
+          instrumental: false,
+        });
+
+        const { data: song } = await supabase
+          .from("songs")
+          .insert({
+            user_id: user.id,
+            batch_id: batch.id,
+            prompt_original: promptText || "",
+            prompt_enhanced: finalPrompt,
+            recipient_type: recipientType,
+            emotion,
+            status: "generating",
+            suno_task_id: sunoResult.task_id,
+          })
+          .select()
+          .single();
+
+        return song;
+      } catch (err) {
+        console.error(`Song ${i} generation failed:`, err);
+        return null;
+      }
     });
 
-    const { data: song, error: songError } = await supabase
-      .from("songs")
-      .insert({
-        user_id: user.id,
-        batch_id: batch.id,
-        prompt_original: promptText || "",
-        prompt_enhanced: finalPrompt,
-        recipient_type: recipientType,
-        emotion,
-        status: "generating",
-        suno_task_id: sunoResult.task_id,
-      })
-      .select()
-      .single();
-
-    if (songError) throw songError;
-    const songs = [song];
+    // All 3 fire at once — don't wait sequentially
+    const songs = (await Promise.all(songPromises)).filter(Boolean);
 
     return NextResponse.json({
       batchId: batch.id,
