@@ -100,18 +100,20 @@ export default function GeneratePage() {
     }
   }, [store, addLog]);
 
-  const startPolling = (batchId: string, taskIdList: string[] = []) => {
+  const startPolling = (_batchId: string, taskIdList: string[] = []) => {
     let pollCount = 0;
-    addLog("Starting status polling every 4s...");
+    addLog(`Polling ${taskIdList.length} tasks: ${taskIdList.join(", ")}`);
+
+    if (taskIdList.length === 0) {
+      addLog("No task IDs to poll!", "error");
+      setError("No songs were created — check API logs");
+      return;
+    }
 
     pollRef.current = setInterval(async () => {
       pollCount++;
       try {
-        // Use taskIds for anonymous mode, batchId for logged-in
-        const isAnon = batchId.startsWith("anon");
-        const url = isAnon && taskIdList.length > 0
-          ? `/api/generate/status?taskIds=${taskIdList.join(",")}`
-          : `/api/generate/status?batchId=${batchId}`;
+        const url = `/api/generate/status?taskIds=${taskIdList.join(",")}`;
         const res = await fetch(url);
         const rawText = await res.text();
         let data;

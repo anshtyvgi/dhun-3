@@ -1,4 +1,3 @@
-import { createClient } from "@/lib/supabase/server";
 import { generateSong } from "@/lib/suno/client";
 import { enhancePrompt } from "@/lib/gemini/prompt-enhancer";
 import { emotions } from "@/lib/emotions";
@@ -11,11 +10,6 @@ export async function POST(request: Request) {
 
     console.log("[Generate] Starting:", { emotion, recipientType, promptText: promptText?.slice(0, 50) });
 
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    const userId = user?.id;
-    console.log("[Generate] User:", userId || "ANONYMOUS (no auth)");
-
     // Enhance prompt — catch Gemini errors gracefully
     let finalPrompt = enhancedPrompt;
     if (!finalPrompt) {
@@ -26,33 +20,14 @@ export async function POST(request: Request) {
           emotion,
           recipientType,
         });
-        console.log("[Generate] Prompt enhanced:", finalPrompt?.slice(0, 80));
+        console.log("[Generate] Prompt enhanced OK");
       } catch (err) {
-        console.error("[Generate] Gemini failed, using raw prompt:", err);
+        console.error("[Generate] Gemini failed:", err);
         finalPrompt = promptText || `A ${emotion} song`;
       }
     }
 
     const emotionConfig = emotions[emotion as keyof typeof emotions];
-
-    // Create batch in DB if user is logged in
-    let batchId: string | null = null;
-    if (userId) {
-      const { data: batch } = await supabase
-        .from("generation_batches")
-        .insert({
-          user_id: userId,
-          prompt_original: promptText || "",
-          prompt_enhanced: finalPrompt,
-          recipient_type: recipientType,
-          emotion,
-          status: "generating",
-        })
-        .select()
-        .single();
-      batchId = batch?.id || null;
-      console.log("[Generate] Batch:", batchId);
-    }
 
     // Fire 3 Suno requests in PARALLEL
     const songPromises = Array.from({ length: 3 }, async (_, i) => {
@@ -67,29 +42,8 @@ export async function POST(request: Request) {
         });
         console.log(`[Generate] Suno ${i + 1} taskId: ${sunoResult.task_id}`);
 
-        // Save to DB if user is logged in
-        if (userId && batchId) {
-          const { data: song } = await supabase
-            .from("songs")
-            .insert({
-              user_id: userId,
-              batch_id: batchId,
-              prompt_original: promptText || "",
-              prompt_enhanced: finalPrompt,
-              recipient_type: recipientType,
-              emotion,
-              status: "generating",
-              suno_task_id: sunoResult.task_id,
-            })
-            .select()
-            .single();
-          return song;
-        }
-
-        // Anonymous mode — return fake song object
         return {
-          id: `anon-${i}-${Date.now()}`,
-          batch_id: batchId,
+          id: `song-${i}-${Date.now()}`,
           suno_task_id: sunoResult.task_id,
           status: "generating",
           emotion,
@@ -108,10 +62,10 @@ export async function POST(request: Request) {
     });
 
     const songs = (await Promise.all(songPromises)).filter(Boolean);
-    console.log(`[Generate] ${songs.length} songs created`);
+    console.log(`[Generate] ${songs.length} songs, taskIds: ${songs.map(s => s?.suno_task_id).join(", ")}`);
 
     return NextResponse.json({
-      batchId: batchId || `anon-batch-${Date.now()}`,
+      batchId: `batch-${Date.now()}`,
       songs,
     });
   } catch (error) {
