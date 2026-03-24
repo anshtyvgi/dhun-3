@@ -6,9 +6,51 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const batchId = searchParams.get("batchId");
+    // Anonymous mode: comma-separated task IDs passed directly
+    const taskIds = searchParams.get("taskIds");
 
+    // Anonymous polling — check Suno directly by task IDs
+    if (taskIds) {
+      const ids = taskIds.split(",").filter(Boolean);
+      const results = await Promise.all(
+        ids.map(async (taskId) => {
+          try {
+            const status = await getSongStatus(taskId);
+            const s = (status.status || "").toUpperCase();
+            const isComplete = s === "SUCCESS" || s === "FIRST_SUCCESS";
+            const isFailed = s.includes("FAILED") || s.includes("ERROR");
+            const sunoData = status.data?.[0];
+
+            return {
+              id: taskId,
+              suno_task_id: taskId,
+              status: isComplete ? "completed" : isFailed ? "failed" : "generating",
+              audio_url: isComplete ? (sunoData?.audioUrl || sunoData?.streamAudioUrl || null) : null,
+              lyrics: isComplete ? (sunoData?.prompt || null) : null,
+              title: isComplete ? (sunoData?.title || null) : null,
+              duration_seconds: isComplete && sunoData?.duration ? Math.round(sunoData.duration) : null,
+            };
+          } catch (err) {
+            console.error(`[Status] Error checking ${taskId}:`, err);
+            return { id: taskId, suno_task_id: taskId, status: "generating", audio_url: null, lyrics: null, title: null, duration_seconds: null };
+          }
+        })
+      );
+
+      const completedCount = results.filter((s) => s.status === "completed").length;
+      const failedCount = results.filter((s) => s.status === "failed").length;
+
+      return NextResponse.json({
+        batchId: "anon",
+        status: completedCount + failedCount === results.length ? "completed" : "generating",
+        songs: results,
+        debug: { total: results.length, completed: completedCount, failed: failedCount },
+      });
+    }
+
+    // Normal mode — use DB
     if (!batchId) {
-      return NextResponse.json({ error: "batchId is required" }, { status: 400 });
+      return NextResponse.json({ error: "batchId or taskIds required" }, { status: 400 });
     }
 
     const supabase = await createClient();
@@ -21,7 +63,6 @@ export async function GET(request: Request) {
 
     if (error) throw error;
 
-    // Check ALL pending songs in parallel
     const updatedSongs = await Promise.all(
       (songs || []).map(async (song) => {
         if (
@@ -30,10 +71,8 @@ export async function GET(request: Request) {
         ) {
           try {
             const status = await getSongStatus(song.suno_task_id);
-            console.log(`[Suno Status] task=${song.suno_task_id} status=${status.status} data_count=${status.data?.length || 0}`);
+            console.log(`[Status] task=${song.suno_task_id} status=${status.status} data=${status.data?.length || 0}`);
 
-            // Suno API status values: PENDING, TEXT_SUCCESS, FIRST_SUCCESS, SUCCESS,
-            // CREATE_TASK_FAILED, GENERATE_AUDIO_FAILED, CALLBACK_EXCEPTION, SENSITIVE_WORD_ERROR
             const s = (status.status || "").toUpperCase();
             const isComplete = s === "SUCCESS" || s === "FIRST_SUCCESS";
             const isFailed = s === "CREATE_TASK_FAILED" || s === "GENERATE_AUDIO_FAILED" ||
@@ -41,17 +80,13 @@ export async function GET(request: Request) {
 
             if (isComplete && status.data && status.data.length > 0) {
               const sunoData = status.data[0];
-              console.log(`[Suno Complete] title="${sunoData.title}" audio="${sunoData.audioUrl?.slice(0, 80)}..." duration=${sunoData.duration}`);
-
-              // Extract lyrics from the prompt field (Suno puts lyrics there)
-              const lyrics = sunoData.prompt || null;
 
               const { data: updated } = await supabase
                 .from("songs")
                 .update({
                   status: "completed",
                   audio_url: sunoData.audioUrl || sunoData.streamAudioUrl || null,
-                  lyrics,
+                  lyrics: sunoData.prompt || null,
                   title: sunoData.title || null,
                   duration_seconds: sunoData.duration ? Math.round(sunoData.duration) : null,
                   updated_at: new Date().toISOString(),
@@ -64,7 +99,6 @@ export async function GET(request: Request) {
             }
 
             if (isFailed) {
-              console.log(`[Suno Failed] task=${song.suno_task_id} error=${status.error}`);
               await supabase
                 .from("songs")
                 .update({ status: "failed", updated_at: new Date().toISOString() })
@@ -72,7 +106,7 @@ export async function GET(request: Request) {
               return { ...song, status: "failed" };
             }
           } catch (err) {
-            console.error(`[Suno Error] task=${song.suno_task_id}:`, err);
+            console.error(`[Status] Error for ${song.suno_task_id}:`, err);
           }
         }
         return song;
@@ -90,7 +124,7 @@ export async function GET(request: Request) {
       debug: { total: updatedSongs.length, completed: completedCount, failed: failedCount },
     });
   } catch (error) {
-    console.error("Status check error:", error);
+    console.error("[Status] Fatal:", error);
     return NextResponse.json({ error: "Failed to check status" }, { status: 500 });
   }
 }

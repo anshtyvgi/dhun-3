@@ -39,11 +39,13 @@ export async function updateSession(request: NextRequest) {
   const isPublicRoute = request.nextUrl.pathname.startsWith("/card/");
   const isApiRoute = request.nextUrl.pathname.startsWith("/api/");
 
-  if (!user && !isAuthRoute && !isPublicRoute && !isApiRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
+  // TODO: Re-enable auth redirect once Google/OTP auth is configured on Supabase
+  // For now, allow all routes without auth for testing
+  // if (!user && !isAuthRoute && !isPublicRoute && !isApiRoute) {
+  //   const url = request.nextUrl.clone();
+  //   url.pathname = "/login";
+  //   return NextResponse.redirect(url);
+  // }
 
   if (user && isAuthRoute) {
     const url = request.nextUrl.clone();
