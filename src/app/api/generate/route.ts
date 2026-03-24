@@ -56,12 +56,22 @@ export async function POST(request: Request) {
           duration_seconds: null,
         };
       } catch (err) {
-        console.error(`[Generate] Song ${i + 1} failed:`, err);
-        return null;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[Generate] Song ${i + 1} failed:`, msg);
+        return {
+          id: `error-${i}-${Date.now()}`,
+          suno_task_id: null,
+          status: "failed",
+          error: msg,
+          emotion,
+          recipient_type: recipientType,
+          audio_url: null, lyrics: null, title: null, duration_seconds: null,
+          prompt_original: promptText || "", prompt_enhanced: finalPrompt,
+        };
       }
     });
 
-    const songs = (await Promise.all(songPromises)).filter(Boolean);
+    const songs = await Promise.all(songPromises);
     console.log(`[Generate] ${songs.length} songs, taskIds: ${songs.map(s => s?.suno_task_id).join(", ")}`);
 
     return NextResponse.json({
